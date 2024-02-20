@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	appsv1 "k8s.io/api/apps/v1"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -379,11 +380,33 @@ func (ev *Evaluator) prepareCandidate(ctx context.Context, c Candidate, pod *v1.
 					}
 				}
 			}
+			var deployment *appsv1.Deployment
+			replicaSet, err := util.GetReplicaSetOf(ctx, cs, victim)
+			if err != nil && !errors.Is(err, util.NoOwnerError) {
+				logger.Error(err, "Could not get the controller of the preempted pod", "pod", klog.KObj(victim))
+				errCh.SendError(err)
+			}
+			if replicaSet != nil {
+				deployment, err = util.GetDeploymentOf(ctx, cs, replicaSet)
+				if err != nil && !errors.Is(err, util.NoOwnerError) {
+					logger.Error(err, "Could not get the controller of the preempted pod", "pod", klog.KObj(victim))
+					errCh.SendError(err)
+				}
+			}
+
 			if err := util.DeletePod(ctx, cs, victim); err != nil {
 				logger.Error(err, "Preempted pod", "pod", klog.KObj(victim), "preemptor", klog.KObj(pod))
 				errCh.SendErrorWithCancel(err, cancel)
 				return
 			}
+			// shrink the replica set
+			if deployment != nil {
+				if err = util.ShrinkDeploymentReplicaBy(ctx, cs, deployment, 1); err != nil {
+					logger.Error(err, "Could not shrink the deployment", "deployment", klog.KObj(deployment))
+					errCh.SendError(err)
+				}
+			}
+
 			logger.V(2).Info("Preemptor Pod preempted victim Pod", "preemptor", klog.KObj(pod), "victim", klog.KObj(victim), "node", c.Name())
 		}
 
