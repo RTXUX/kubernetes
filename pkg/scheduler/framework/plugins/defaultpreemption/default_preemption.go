@@ -167,7 +167,8 @@ func (pl *DefaultPreemption) SelectVictimsOnNode(
 	// check if the given pod can be scheduled.
 	podPriority := corev1helpers.PodPriority(pod)
 	for _, pi := range nodeInfo.Pods {
-		if corev1helpers.PodPriority(pi.Pod) < podPriority {
+		_, preemptible := util.PodLabelPreemptibleSince(pi.Pod)
+		if corev1helpers.PodPriority(pi.Pod) < podPriority || preemptible {
 			potentialVictims = append(potentialVictims, pi)
 			if err := removePod(pi); err != nil {
 				return nil, 0, framework.AsStatus(err)

@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -187,4 +188,66 @@ func As[T any](oldObj, newobj interface{}) (T, T, error) {
 		}
 	}
 	return oldTyped, newTyped, nil
+}
+
+var schedIdleKey = "custom-sched-preemptible-since"
+
+func PodLabelPreemptibleSince(pod *v1.Pod) (*time.Time, bool) {
+	value, ok := pod.Labels[schedIdleKey]
+	if !ok {
+		return nil, false
+	}
+	valueInt, err := strconv.Atoi(value)
+	if err != nil {
+		return nil, false
+	}
+	if valueInt <= 0 {
+		return nil, false
+	}
+	t := time.Unix(int64(valueInt), 0)
+	return &t, true
+}
+
+var NoOwnerError = errors.New("object has no owner")
+
+func GetReplicaSetOf(ctx context.Context, cs kubernetes.Interface, pod *v1.Pod) (*appsv1.ReplicaSet, error) {
+	if pod.OwnerReferences == nil || len(pod.OwnerReferences) == 0 {
+		return nil, NoOwnerError
+	}
+	for _, owner := range pod.OwnerReferences {
+		if *owner.Controller && owner.Kind == "ReplicaSet" {
+			replicaSet, err := cs.AppsV1().ReplicaSets(pod.Namespace).Get(ctx, owner.Name, metav1.GetOptions{})
+			if err != nil {
+				return nil, fmt.Errorf("failed to get ReplicaSet %s/%s: %w", pod.Namespace, owner.Name, err)
+			}
+			return replicaSet, nil
+		}
+	}
+	return nil, NoOwnerError
+}
+
+func GetDeploymentOf(ctx context.Context, cs kubernetes.Interface, replicaSet *appsv1.ReplicaSet) (*appsv1.Deployment, error) {
+	if replicaSet.OwnerReferences == nil || len(replicaSet.OwnerReferences) == 0 {
+		return nil, NoOwnerError
+	}
+	for _, owner := range replicaSet.OwnerReferences {
+		if *owner.Controller && owner.Kind == "Deployment" {
+			deployment, err := cs.AppsV1().Deployments(replicaSet.Namespace).Get(ctx, owner.Name, metav1.GetOptions{})
+			if err != nil {
+				return nil, fmt.Errorf("failed to get Deployment %s/%s: %w", replicaSet.Namespace, owner.Name, err)
+			}
+			return deployment, nil
+		}
+	}
+	return nil, NoOwnerError
+}
+
+func ShrinkDeploymentReplicaBy(ctx context.Context, cs kubernetes.Interface, deployment *appsv1.Deployment, shrinkBy int32) error {
+	deploymentCopy := deployment.DeepCopy()
+	*deploymentCopy.Spec.Replicas -= shrinkBy
+	_, err := cs.AppsV1().Deployments(deployment.Namespace).Update(ctx, deploymentCopy, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to shrink Deployment %s/%s: %w", deployment.Namespace, deployment.Name, err)
+	}
+	return nil
 }

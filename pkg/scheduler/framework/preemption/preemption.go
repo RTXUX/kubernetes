@@ -553,7 +553,8 @@ func getLowerPriorityNominatedPods(logger klog.Logger, pn framework.PodNominator
 	var lowerPriorityPods []*v1.Pod
 	podPriority := corev1helpers.PodPriority(pod)
 	for _, pi := range podInfos {
-		if corev1helpers.PodPriority(pi.Pod) < podPriority {
+		_, preemptible := util.PodLabelPreemptibleSince(pi.Pod)
+		if corev1helpers.PodPriority(pi.Pod) < podPriority || preemptible {
 			lowerPriorityPods = append(lowerPriorityPods, pi.Pod)
 		}
 	}
